@@ -1,0 +1,8 @@
+_commit: v2.1.1
+_src_path: gh:mopidy/cookiecutter-mopidy-ext
+author_email: me@toino.pt
+author_full_name: João Pereira
+dist_name: mopidy-dynamic
+ext_name: dynamic
+github_username: ttoino
+short_description: Mopidy extension for Foobar mechanics
