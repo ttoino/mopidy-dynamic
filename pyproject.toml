@@ -1,7 +1,7 @@
 [project]
 name = "Mopidy-Dynamic"
 description = "Mopidy extension with support for dynamically generated playlists"
-version = "0.0.1"
+version = "1.0.0"
 readme = "README.md"
 requires-python = ">= 3.11"
 license = "GPL-3.0-or-later"
