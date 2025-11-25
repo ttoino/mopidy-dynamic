@@ -288,8 +288,8 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler
         def _search(p: "Pattern", v: str) -> bool:
             return p.search(v) is not None
 
-        def _names(l: "Iterable[Artist]") -> "Iterable[str]":
-            return map(operator.attrgetter("name"), l)
+        def _names(artists: "Iterable[Artist]") -> "Iterable[str]":
+            return map(operator.attrgetter("name"), artists)
 
         def _filter(t: "Track") -> bool:
             result = True
