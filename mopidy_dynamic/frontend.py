@@ -18,11 +18,12 @@ from . import Extension, logger, translator
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
+    from datetime import date
     from re import Pattern
 
     from mopidy.core.actor import Core
     from mopidy.ext import Config
-    from mopidy.models import Artist, Playlist, Track
+    from mopidy.models import Album, Artist, Playlist, SearchResult, Track
     from watchdog.events import (
         DirCreatedEvent,
         DirDeletedEvent,
@@ -139,7 +140,7 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler
 
         if self.core.playlists is not None and name in self._playlists:
             uri = self._playlists.pop(name)
-            self.core.playlists.delete(uri).get()
+            cast("pykka.Future", self.core.playlists.delete(uri)).get()
 
     def on_modified(self, event: "DirModifiedEvent | FileModifiedEvent") -> None:
         pl_path = path.expand_path(event.src_path)
@@ -172,7 +173,7 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler
 
         if self.core.playlists is not None and old_name in self._playlists:
             uri = self._playlists.pop(old_name)
-            self.core.playlists.delete(uri).get()
+            cast("pykka.Future", self.core.playlists.delete(uri)).get()
 
         new_path = path.expand_path(event.dest_path)
 
@@ -226,7 +227,7 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler
 
         playlist = playlist.replace(tracks=self._apply_operators(operators))
 
-        self.core.playlists.save(playlist).get()
+        cast("pykka.Future", self.core.playlists.save(playlist)).get()
         self._ignore_changed.add(cast("str", playlist.name))
 
     def _apply_operators(self, operators: "Iterable[Operator]") -> "list[Track]":
@@ -240,9 +241,19 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler
             match op["operator_type"]:
                 case "library":
                     logger.debug("Started library lookup")
-                    refs = self.core.library.browse(op["uri"]).get()
-                    results = self.core.library.lookup(
-                        [r.uri for r in refs if r.type == Ref.TRACK]
+                    refs = cast(
+                        "pykka.Future[list[Ref] | None]",
+                        self.core.library.browse(op["uri"]),
+                    ).get()
+
+                    if refs is None:
+                        continue
+
+                    results = cast(
+                        "pykka.Future[dict[str, list[Track]]]",
+                        self.core.library.lookup(
+                            [r.uri for r in refs if r.type == Ref.TRACK]
+                        ),
                     ).get()
                     logger.debug("Finished library lookup %s", len(refs))
                     for tracks in results.values():
@@ -250,13 +261,14 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler
 
                 case "search":
                     logger.debug("Started search")
-                    results = self.core.library.search(
-                        {"uri": op["uris"]}, list(op["uris"])
+                    results = cast(
+                        "pykka.Future[list[SearchResult]]",
+                        self.core.library.search({"uri": op["uris"]}, list(op["uris"])),
                     ).get()
                     logger.debug("Finished search %s", len(results))
                     for r in results:
-                        if r is not None:
-                            result.extend(r.tracks)
+                        if r is not None and r.tracks is not None:
+                            result.extend(cast("list[Track]", r.tracks))
 
                 case "sort":
                     logger.debug("Started sort")
@@ -281,25 +293,36 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler
 
         def _filter(t: "Track") -> bool:
             result = True
+            album = cast("Album", t.album)
 
-            for k in op:
-                match k:
+            for prop, wanted in op.items():
+                match prop:
                     case "uri" | "name" | "genre":
-                        result &= _search(op[k], getattr(t, k))
+                        result &= _search(cast("Pattern", wanted), getattr(t, prop))
                     case "artist" | "composer" | "performer":
                         result &= any(
-                            _search(op[k], v) for v in _names(getattr(t, k + "s"))
+                            _search(cast("Pattern", wanted), v)
+                            for v in _names(getattr(t, prop + "s"))
                         )
                     case "any_artist":
                         result &= any(
-                            _search(op[k], v)
-                            for v in _names((*t.artists, *t.composers, *t.performers))
+                            _search(cast("Pattern", wanted), v)
+                            for v in _names(
+                                (
+                                    *cast("Iterable[Artist]", t.artists),
+                                    *cast("Iterable[Artist]", t.composers),
+                                    *cast("Iterable[Artist]", t.performers),
+                                )
+                            )
                         )
                     case "album_name":
-                        result &= _search(op[k], t.album.name)
+                        result &= _search(
+                            cast("Pattern", wanted), cast("str", album.name)
+                        )
                     case "album_artist":
                         result &= any(
-                            _search(op[k], v) for v in _names(t.album.artists)
+                            _search(cast("Pattern", wanted), v)
+                            for v in _names(cast("Iterable[Artist]", album.artists))
                         )
                     case (
                         "min_date"
@@ -311,14 +334,14 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler
                         | "min_length"
                         | "max_length"
                     ):
-                        d, p = k.split("_", 1)
+                        d, p = prop.split("_", 1)
                         result &= (operator.ge if d == "min" else operator.le)(
-                            getattr(t, p), op[k]
+                            getattr(t, p), cast("date | int", wanted)
                         )
                     case "min_album_date":
-                        result &= t.album.date >= op[k]
+                        result &= cast("date", album.date) >= cast("date", wanted)
                     case "max_album_date":
-                        result &= t.album.date <= op[k]
+                        result &= cast("date", album.date) <= cast("date", wanted)
 
             return result if op["operator_type"] == "include" else not result
 
