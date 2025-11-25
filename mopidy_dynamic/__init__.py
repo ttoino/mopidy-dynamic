@@ -28,6 +28,7 @@ class Extension(ext.Extension):
     def get_config_schema(self) -> "ConfigSchema":
         schema = super().get_config_schema()
         schema["playlists_dir"] = types.Path(optional=True)
+        schema["playlists_uri"] = types.String(optional=False)
         return schema
 
     def setup(self, registry: "Registry") -> None:

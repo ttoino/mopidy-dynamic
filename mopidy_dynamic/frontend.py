@@ -5,6 +5,14 @@ import pykka
 from mopidy.core.listener import CoreListener
 from mopidy.internal import path
 from mopidy.models import Ref
+from watchdog.events import (
+    FileCreatedEvent,
+    FileDeletedEvent,
+    FileModifiedEvent,
+    FileMovedEvent,
+    FileSystemEventHandler,
+)
+from watchdog.observers import Observer
 
 from . import Extension, logger, translator
 
@@ -14,12 +22,18 @@ if TYPE_CHECKING:
 
     from mopidy.core.actor import Core
     from mopidy.ext import Config
-    from mopidy.models import Artist, Track
+    from mopidy.models import Artist, Playlist, Track
+    from watchdog.events import (
+        DirCreatedEvent,
+        DirDeletedEvent,
+        DirModifiedEvent,
+        DirMovedEvent,
+    )
 
     from .types import DynamicConfig, FilterOperator, Operator
 
 
-class DynamicFrontend(pykka.ThreadingActor, CoreListener):
+class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler):
     def __init__(self, config: "Config", core: "Core") -> None:
         super().__init__()
 
@@ -34,27 +48,186 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener):
             else Extension.get_data_dir(config)
         )
 
+        self._playlists_uri = ext_config["playlists_uri"]
+
+        self._playlists: dict[str, str] = {}
+        self._ignore_changed: set[str] = set()
+
+        self._observer = Observer()
+
     def on_start(self) -> None:
-        if self.core.playlists is None:
+        if self.core.playlists is None or self._playlists_dir is None:
             return
+
+        self._observer.schedule(
+            self,
+            str(self._playlists_dir),
+            event_filter=[
+                FileCreatedEvent,
+                FileDeletedEvent,
+                FileModifiedEvent,
+                FileMovedEvent,
+            ],
+        )
+        self._observer.start()
 
         for pl_path in self._playlists_dir.iterdir():
             name = translator.path_to_name(pl_path)
 
-            playlist = self.core.playlists.create(name, "m3u").get()
+            if name is None:
+                continue
 
-            if playlist is None:
-                playlist = self.core.playlists.lookup(f"m3u:{name}.m3u8").get()
+            playlist = self._name_to_playlist(name)
 
             if playlist is None:
                 continue
 
-            with pl_path.open() as fp:
-                operators = translator.load_operators(fp)
+            self._update_playlist(playlist)
 
-            playlist = playlist.replace(tracks=self._apply_operators(operators))
+    def on_stop(self) -> None:
+        self._observer.stop()
+        self._observer.join()
 
-            self.core.playlists.save(playlist)
+    def playlist_changed(self, playlist: "Playlist") -> None:
+        name = cast("str", playlist.name)
+        if self._playlists[name] != playlist.uri or name in self._ignore_changed:
+            return
+
+        self._ignore_changed.discard(name)
+        self._update_playlist(playlist)
+
+    def playlist_deleted(self, uri: str) -> None:
+        for name, old_uri in self._playlists.items():
+            if old_uri != uri:
+                continue
+
+            playlist = self._name_to_playlist(name)
+
+            if playlist is not None:
+                self._update_playlist(playlist)
+
+            return
+
+    def on_created(self, event: "DirCreatedEvent | FileCreatedEvent") -> None:
+        pl_path = path.expand_path(event.src_path)
+
+        if pl_path is None:
+            return
+
+        name = translator.path_to_name(pl_path)
+
+        if name is None:
+            return
+
+        playlist = self._name_to_playlist(name)
+
+        if playlist is None:
+            return
+
+        self._update_playlist(playlist)
+
+    def on_deleted(self, event: "DirDeletedEvent | FileDeletedEvent") -> None:
+        pl_path = path.expand_path(event.src_path)
+
+        if pl_path is None:
+            return
+
+        name = translator.path_to_name(pl_path)
+
+        if name is None:
+            return
+
+        if self.core.playlists is not None and name in self._playlists:
+            uri = self._playlists.pop(name)
+            self.core.playlists.delete(uri).get()
+
+    def on_modified(self, event: "DirModifiedEvent | FileModifiedEvent") -> None:
+        pl_path = path.expand_path(event.src_path)
+
+        if pl_path is None:
+            return
+
+        name = translator.path_to_name(pl_path)
+
+        if name is None:
+            return
+
+        playlist = self._name_to_playlist(name)
+
+        if playlist is None:
+            return
+
+        self._update_playlist(playlist)
+
+    def on_moved(self, event: "DirMovedEvent | FileMovedEvent") -> None:
+        old_path = path.expand_path(event.src_path)
+
+        if old_path is None:
+            return
+
+        old_name = translator.path_to_name(old_path)
+
+        if old_name is None:
+            return
+
+        if self.core.playlists is not None and old_name in self._playlists:
+            uri = self._playlists.pop(old_name)
+            self.core.playlists.delete(uri).get()
+
+        new_path = path.expand_path(event.dest_path)
+
+        if new_path is None:
+            return
+
+        name = translator.path_to_name(new_path)
+
+        if name is None:
+            return
+
+        playlist = self._name_to_playlist(name)
+
+        if playlist is None:
+            return
+
+        self._update_playlist(playlist)
+
+    def _name_to_playlist(self, name: str) -> "Playlist | None":
+        if self.core.playlists is None:
+            return None
+
+        playlist = None
+        if name in self._playlists:
+            playlist = cast(
+                "pykka.Future[Playlist | None]",
+                self.core.playlists.lookup(self._playlists[name]),
+            ).get()
+
+        if playlist is None:
+            playlist = cast(
+                "pykka.Future[Playlist | None]",
+                self.core.playlists.create(name, self._playlists_uri),
+            ).get()
+
+        if playlist is not None:
+            self._playlists[name] = cast("str", playlist.uri)
+
+        return playlist
+
+    def _update_playlist(self, playlist: "Playlist") -> None:
+        if self.core.playlists is None or self._playlists_dir is None:
+            return
+
+        playlist_path = self._playlists_dir / translator.name_to_path(
+            cast("str", playlist.name)
+        )
+
+        with playlist_path.open() as fp:
+            operators = translator.load_operators(fp)
+
+        playlist = playlist.replace(tracks=self._apply_operators(operators))
+
+        self.core.playlists.save(playlist).get()
+        self._ignore_changed.add(cast("str", playlist.name))
 
     def _apply_operators(self, operators: "Iterable[Operator]") -> "list[Track]":
         result: list[Track] = []

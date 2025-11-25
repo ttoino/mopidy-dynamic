@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 class DynamicConfig(TypedDict):
     playlists_dir: "Path | None"
+    playlists_uri: str
 
 
 class LibraryOperator(TypedDict):

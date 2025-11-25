@@ -48,7 +48,7 @@ def path_to_name(path: Path) -> str | None:
 
 def name_to_path(
     name: str,
-    ext: str | None = None,
+    ext: str | None = ".dpl",
     sep: str = "|",
 ) -> Path:
     """Convert name with optional extension to file path."""
