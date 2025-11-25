@@ -1,10 +1,9 @@
-# mopidy-dynamic
+# Mopidy Dynamic
 
 [![Latest PyPI version](https://img.shields.io/pypi/v/mopidy-dynamic)](https://pypi.org/p/mopidy-dynamic)
 [![CI build status](https://img.shields.io/github/actions/workflow/status/ttoino/mopidy-dynamic/ci.yml)](https://github.com/ttoino/mopidy-dynamic/actions/workflows/ci.yml)
-[![Test coverage](https://img.shields.io/codecov/c/gh/ttoino/mopidy-dynamic)](https://codecov.io/gh/ttoino/mopidy-dynamic)
 
-Mopidy extension with support for dynamically generated playlists
+Mopidy extension to generate playlists dynamically.
 
 ## Installation
 
@@ -14,16 +13,80 @@ Install by running:
 python3 -m pip install mopidy-dynamic
 ```
 
-See https://mopidy.com/ext/dynamic/ for alternative installation methods.
+See [this extension's page](https://mopidy.com/ext/dynamic/) for alternative installation methods.
 
 ## Configuration
 
-Before starting Mopidy, you must add configuration for
-mopidy-dynamic to your Mopidy configuration file:
+Before starting Mopidy, you must add configuration for mopidy-dynamic to your Mopidy configuration file:
 
 ```ini
 [dynamic]
-# TODO: Add example of extension config
+enabled = true
+
+# Path to directory with the DPL files.
+# Defaults to the extension's data dir.
+playlists_dir =
+
+# Backend used to save the playlists.
+# Defaults to the bundled M3U backend.
+playlists_uri = m3u
+```
+
+### DPL files
+
+All dynamic playlists are defined in `.dpl` files.
+These files have the following structure:
+
+```dpl
+# Lines starting with # are considered comments and ignored
+# Empty lines are also ignored
+
+# Non-indented lines define a new operation
+operation
+    # Indented lines define options in the current operation
+    option
+# Unknown operations are ignored
+
+# The library operation adds all tracks at a specified URI
+library
+    # Add all tracks from the local backend
+    local:directory?type=track
+
+# The search operation adds all tracks found by a search operation
+# Note: backends usually have a limit on the amount of results
+search
+    # Search all tracks with 'sound' or 'music' in the name
+    track_name=sound
+    track_name=music
+    # All properties supported by PlaybackController.search are supported
+    # https://docs.mopidy.com/stable/api/core/#mopidy.core.LibraryController.search
+
+# The exclude operation removes all tracks that satisfy the given constraints
+exclude
+    # Remove tracks before 2015 and with any artist starting with B
+    max_date=2014-12-31
+    any_artist=^B
+
+# The include operation keeps all tracks that satisfy the given constraints
+include
+    # Keep tracks in the first disc, and that end in a
+    max_disc_no=1
+    name=a$
+
+# Include and exclude support the following options:
+# regular expression: uri, name, genre, artist, composer, performer,
+#   any_artist (artist, composer, or performer),
+#   album_name, album_artist
+# date: min_date, max_date, min_album_date, max_album_date
+# integer: min_track_no, max_track_no, min_disc_no, max_disc_no,
+#   min_length, max_length
+
+# The sort operation sorts all tracks
+sort
+    # Sort by name
+    name
+    # If tracks have the same name, sort by album release date
+    album.date
 ```
 
 ## Project resources
@@ -31,89 +94,6 @@ mopidy-dynamic to your Mopidy configuration file:
 - [Source code](https://github.com/ttoino/mopidy-dynamic)
 - [Issues](https://github.com/ttoino/mopidy-dynamic/issues)
 - [Releases](https://github.com/ttoino/mopidy-dynamic/releases)
-
-## Development
-
-### Set up development environment
-
-Clone the repo using, e.g. using [gh](https://cli.github.com/):
-
-```sh
-gh repo clone ttoino/mopidy-dynamic
-```
-
-Enter the directory, and install dependencies using [uv](https://docs.astral.sh/uv/):
-
-```sh
-cd mopidy-dynamic/
-uv sync
-```
-
-### Running tests
-
-To run all tests and linters in isolated environments, use
-[tox](https://tox.wiki/):
-
-```sh
-tox
-```
-
-To only run tests, use [pytest](https://pytest.org/):
-
-```sh
-pytest
-```
-
-To format the code, use [ruff](https://docs.astral.sh/ruff/):
-
-```sh
-ruff format .
-```
-
-To check for lints with ruff, run:
-
-```sh
-ruff check .
-```
-
-To check for type errors, use [pyright](https://microsoft.github.io/pyright/):
-
-```sh
-pyright .
-```
-
-### Setup before first release
-
-Before the first release, you must [enable trusted publishing on
-PyPI](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
-so that the `release.yml` GitHub Action can create the PyPI project and publish
-releases to PyPI.
-
-When following the instructions linked above, use the following values in the
-form at PyPI:
-
-- Publisher: GitHub
-- PyPI project name: `mopidy-dynamic`
-- Owner: `ttoino`
-- Repository name: `mopidy-dynamic`
-- Workflow name: `release.yml`
-- Environment name: `pypi` (must match environment name in `release.yml`)
-
-### Making a release
-
-To make a release to PyPI, go to the project's [GitHub releases
-page](https://github.com/ttoino/mopidy-dynamic/releases)
-and click the "Draft a new release" button.
-
-In the "choose a tag" dropdown, select the tag you want to release or create a
-new tag, e.g. `v0.1.0`. Add a title, e.g. `v0.1.0`, and a description of the changes.
-
-Decide if the release is a pre-release (alpha, beta, or release candidate) or
-should be marked as the latest release, and click "Publish release".
-
-Once the releease is created, the `release.yml` GitHub Action will automatically
-build and publish the release to
-[PyPI](https://pypi.org/project/mopidy-dynamic/).
 
 ## Credits
 
