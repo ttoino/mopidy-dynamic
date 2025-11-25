@@ -2,39 +2,20 @@ from __future__ import annotations
 
 import os
 import re
-import urllib.parse
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from mopidy.internal import path
-from mopidy.models import Playlist, Ref, Track
+from mopidy.internal.validation import SEARCH_FIELDS
 
-from . import Extension
 from .types import FilterOperator, LibraryOperator, SearchOperator, SortOperator
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
     from typing import IO
 
-    from mopidy.backend import Uri
+    from mopidy.backend import SearchField
 
     from .types import Operator
-
-
-def path_to_uri(
-    path: Path,
-    scheme: str = Extension.ext_name,
-) -> Uri:
-    """Convert file path to URI."""
-    bytes_path = os.path.normpath(bytes(path))
-    uripath = urllib.parse.quote_from_bytes(bytes_path)
-    return urllib.parse.urlunsplit((scheme, None, uripath, None, None))
-
-
-def uri_to_path(uri: Uri) -> Path:
-    """Convert URI to file path."""
-    return path.uri_to_path(uri)
 
 
 def path_to_name(path: Path) -> str | None:
@@ -56,95 +37,87 @@ def name_to_path(
     return Path(name)
 
 
-def operator_to_uri(operator: Operator, scheme: str = Extension.ext_name) -> Uri:
-    match operator["operator_type"]:
-        case "sort":
-            properties_str = "/".join(map(urllib.parse.quote, operator["properties"]))
-
-        case _:
-            properties: list[str] = []
-
-            for prop, value in operator.items():
-                if value is not None:
-                    val = (
-                        value.pattern if isinstance(value, re.Pattern) else repr(value)
-                    )
-                    val = urllib.parse.quote(val)
-                    properties.append(f"{prop}/{val}")
-
-            properties_str = ":".join(properties)
-
-    return f"{scheme}:{operator['operator_type']}:{properties_str}"
-
-
-def uri_to_operator(uri: Uri) -> Operator | None:
-    parts = uri.split(":")
-
-    if len(parts) < 3:
-        return None
-
-    match parts[1]:
-        case "library" if len(parts) == 3:
-            return LibraryOperator(
-                operator_type="library", uri=urllib.parse.unquote(parts[2])
-            )
-
-        case "search":
-            return SearchOperator(
-                operator_type="search",
-                uris=tuple(map(urllib.parse.unquote, parts[2].split("/"))),
-            )
-
-        case "sort" if len(parts) == 3:
-            return SortOperator(
-                operator_type="sort",
-                properties=tuple(map(urllib.parse.unquote, parts[2].split("/"))),
-            )
-
-        case "include" | "exclude":
-            result = FilterOperator(operator_type=parts[1])
-
-            for prop in parts[2:]:
-                key, val = prop.split("/")
-                val = urllib.parse.unquote(val)
-
-                match key:
-                    case (
-                        "uri"
-                        | "name"
-                        | "genre"
-                        | "any_artist"
-                        | "artist"
-                        | "composer"
-                        | "performer"
-                        | "album_name"
-                        | "album_artist"
-                    ):
-                        result[key] = re.compile(val)
-                    case "min_date" | "max_date" | "min_album_date" | "max_album_date":
-                        result[key] = date.fromisoformat(val)
-                    case (
-                        "min_track_no" | "max_track_no" | "min_disc_no" | "max_disc_no"
-                    ):
-                        result[key] = int(val)
-
-            return result
-
-
 def load_operators(fp: IO[str]) -> list[Operator]:
-    return list(filter(None, (uri_to_operator(line.strip()) for line in fp)))
+    result: list[Operator] = []
+    current_operator: Operator | None = None
 
+    for line in fp.readlines():
+        stripped_line = line.strip()
 
-def playlist(
-    path: Path,
-    items: Iterable[Ref | Track] | None = None,
-    mtime: float | None = None,
-) -> Playlist:
-    if items is None:
-        items = []
-    return Playlist(
-        uri=path_to_uri(path),
-        name=path_to_name(path),
-        tracks=tuple(Track(uri=item.uri, name=item.name) for item in items),
-        last_modified=(int(mtime * 1000) if mtime else None),
-    )
+        if stripped_line == "" or stripped_line.startswith("#"):
+            continue
+
+        if line.startswith(" ") and current_operator is not None:
+            # Parameters
+            match current_operator["operator_type"]:
+                case "library":
+                    current_operator["uri"] = stripped_line
+
+                case "search":
+                    key, value = stripped_line.split("=", 1)
+
+                    if key not in cast("set[SearchField]", SEARCH_FIELDS):
+                        continue
+
+                    if key not in current_operator["query"]:
+                        current_operator["query"][key] = []
+
+                    current_operator["query"][key].append(value)
+
+                case "sort":
+                    current_operator["properties"] = current_operator["properties"] + (
+                        stripped_line,
+                    )
+
+                case "include" | "exclude":
+                    key, value = stripped_line.split("=", 1)
+
+                    match key:
+                        case (
+                            "uri"
+                            | "name"
+                            | "genre"
+                            | "any_artist"
+                            | "artist"
+                            | "composer"
+                            | "performer"
+                            | "album_name"
+                            | "album_artist"
+                        ):
+                            current_operator[key] = re.compile(value)
+                        case (
+                            "min_date"
+                            | "max_date"
+                            | "min_album_date"
+                            | "max_album_date"
+                        ):
+                            current_operator[key] = date.fromisoformat(value)
+                        case (
+                            "min_track_no"
+                            | "max_track_no"
+                            | "min_disc_no"
+                            | "max_disc_no"
+                        ):
+                            current_operator[key] = int(value)
+
+        else:
+            # Definition
+            if current_operator is not None:
+                result.append(current_operator)
+
+            match stripped_line:
+                case "library":
+                    current_operator = LibraryOperator(operator_type="library", uri="")
+                case "search":
+                    current_operator = SearchOperator(operator_type="search", query={})
+                case "sort":
+                    current_operator = SortOperator(operator_type="sort", properties=())
+                case "include" | "exclude":
+                    current_operator = FilterOperator(operator_type=stripped_line)
+                case _:
+                    current_operator = None
+
+    if current_operator is not None:
+        result.append(current_operator)
+
+    return result

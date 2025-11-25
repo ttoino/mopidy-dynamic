@@ -80,6 +80,7 @@ ignore = [
     "D",       # pydocstyle
     "D203",    # one-blank-line-before-class
     "D213",    # multi-line-summary-second-line
+    "PLR0912", # too-many-branches
     "PLR2004", # magic-value-compariso
     "TD002",   # missing-todo-author
     "TD003",   # missing-todo-link

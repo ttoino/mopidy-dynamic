@@ -263,7 +263,7 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler
                     logger.debug("Started search")
                     results = cast(
                         "pykka.Future[list[SearchResult]]",
-                        self.core.library.search({"uri": op["uris"]}, list(op["uris"])),
+                        self.core.library.search(op["query"]),
                     ).get()
                     logger.debug("Finished search %s", len(results))
                     for r in results:
@@ -272,7 +272,10 @@ class DynamicFrontend(pykka.ThreadingActor, CoreListener, FileSystemEventHandler
 
                 case "sort":
                     logger.debug("Started sort")
-                    result.sort(key=operator.attrgetter(*op["properties"]))
+                    try:
+                        result.sort(key=operator.attrgetter(*op["properties"]))
+                    except KeyError:
+                        logger.warning("Invalid property in sort operation")
                     logger.debug("Finished sort")
 
                 case "include" | "exclude":

@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from re import Pattern
     from typing import Literal, Required
 
-    from mopidy.backend import Uri
+    from mopidy.backend import Query, SearchField, Uri
 
 
 class DynamicConfig(TypedDict):
@@ -23,7 +23,7 @@ class LibraryOperator(TypedDict):
 class SearchOperator(TypedDict):
     operator_type: "Required[Literal['search']]"
 
-    uris: tuple[str, ...]
+    query: "Query[SearchField]"
 
 
 class FilterOperator(TypedDict, total=False):
